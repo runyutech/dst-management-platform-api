@@ -1,0 +1,17 @@
+.git
+.gitea
+.github
+.idea
+.vscode
+
+# 运行时生成的东西，不要进镜像
+/dmp
+/dmp_files
+/data
+/logs
+/backup
+*.exe
+
+# 文档和编辑器配置
+docs
+*.md

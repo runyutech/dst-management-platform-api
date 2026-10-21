@@ -1,0 +1,39 @@
+name: Build dmp image
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '镜像 tag，留空就是 latest'
+        default: 'latest'
+        required: false
+
+env:
+  IMAGE: cn-nb1.registry.rainapp.cn/rgs/dmp
+
+jobs:
+  build-and-push:
+    runs-on: sz-debian
+    steps:
+      - name: Checkout Code
+        uses: https://git.rainyun.cn/actions/checkout@v4
+
+      - name: Login to Registry
+        uses: https://git.rainyun.cn/docker/login-action@v3
+        with:
+          registry: ${{ vars.PUBLIC_HARBOR_URL }}
+          username: gitea
+          password: ${{ secrets.PUBLIC_HARBOR_PASSWORD }}
+
+      # 手动触发可以指定 tag，push 上来一律 latest。latest 每次都推，方便蛋直接引用
+      - name: Build and push
+        run: |
+          TAG="${{ github.event.inputs.version }}"
+          TAG="${TAG:-latest}"
+          echo "building $IMAGE:$TAG (and :latest)"
+          docker build --platform linux/amd64 -f ./Dockerfile -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"

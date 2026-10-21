@@ -1,10 +1,12 @@
 package dst
 
 import (
+	"context"
 	"dst-management-platform-api/cache"
 	"dst-management-platform-api/constant"
 	"dst-management-platform-api/logger"
 	"dst-management-platform-api/utils"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -16,11 +18,69 @@ import (
 	"github.com/yuin/gopher-lua"
 )
 
-var modAcfMutex sync.Mutex
+var (
+	// 每个房间一把锁：同一房间的模组下载共用 acf 和 ugc 目录，必须串行；
+	// 不同房间互不影响，一个房间的 steamcmd 卡死不会把其它房间堵住
+	modDownloadLocksMu sync.Mutex
+	modDownloadLocks   = map[int]*sync.Mutex{}
+
+	// 正在下载的模组，key 为「房间ID/模组ID」。
+	// 下载状态缓存只有进度，没有「到底还在不在跑」的信息：
+	// DMP 重启、看门狗终止、拷贝失败都会留下没清干净的记录，
+	// handler 靠这个集合区分「真在下载」和「残留状态」，避免永远提示下载中
+	modDownloadStateMu sync.Mutex
+	modDownloadRunning = map[string]struct{}{}
+)
 
 type modSaveData struct {
 	ugcPath    string
 	notUgcPath string
+}
+
+func modDownloadKey(roomID, modID int) string {
+	return strconv.Itoa(roomID) + "/" + strconv.Itoa(modID)
+}
+
+// lockModDownload 取到房间级的下载锁，返回解锁函数
+func lockModDownload(roomID int) func() {
+	modDownloadLocksMu.Lock()
+	lock, ok := modDownloadLocks[roomID]
+	if !ok {
+		lock = &sync.Mutex{}
+		modDownloadLocks[roomID] = lock
+	}
+	modDownloadLocksMu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
+}
+
+// TryStartModDownload 占用某个模组的下载槽，返回 false 表示已经在下载中
+func TryStartModDownload(roomID, modID int) bool {
+	modDownloadStateMu.Lock()
+	defer modDownloadStateMu.Unlock()
+
+	key := modDownloadKey(roomID, modID)
+	if _, ok := modDownloadRunning[key]; ok {
+		return false
+	}
+	modDownloadRunning[key] = struct{}{}
+	return true
+}
+
+// FinishModDownload 释放下载槽
+func FinishModDownload(roomID, modID int) {
+	modDownloadStateMu.Lock()
+	defer modDownloadStateMu.Unlock()
+	delete(modDownloadRunning, modDownloadKey(roomID, modID))
+}
+
+// ModDownloadRunning 该模组是否真的有下载在跑
+func ModDownloadRunning(roomID, modID int) bool {
+	modDownloadStateMu.Lock()
+	defer modDownloadStateMu.Unlock()
+	_, ok := modDownloadRunning[modDownloadKey(roomID, modID)]
+	return ok
 }
 
 func (g *Game) dsModsSetup() error {
@@ -87,8 +147,10 @@ func (g *Game) downloadMod(id int, fileURL string) (error, int64) {
 
 	atomic.AddInt32(&cache.ModDownloadExecuting, 1)
 	defer atomic.AddInt32(&cache.ModDownloadExecuting, -1)
-	modAcfMutex.Lock()
-	defer modAcfMutex.Unlock()
+
+	unlock := lockModDownload(g.room.ID)
+	defer unlock()
+
 	stopMonitor := g.monitorModDownload(id, ugc)
 	defer stopMonitor()
 
@@ -106,12 +168,20 @@ func (g *Game) downloadMod(id int, fileURL string) (error, int64) {
 		logger.Logger.Debugf("正在下载模组：%d", id)
 		downloadCmd := g.generateModDownloadCmd(id)
 		logger.Logger.Debug(downloadCmd)
-		err = utils.BashCMD(downloadCmd)
+		err = g.runSteamcmdDownload(id, downloadCmd)
 		if err != nil {
 			logger.Logger.Errorf("下载模组失败, err: %v", err)
 			return err, modSize
 		}
 		time.Sleep(500 * time.Millisecond)
+
+		// steamcmd 偶尔会正常退出但什么都没下下来，这里先确认落盘，
+		// 否则后面拷空目录、读 acf 都会失败，报错还看不出原因
+		if !utils.FileDirectoryExists(fmt.Sprintf("%s/mods/ugc/%s/steamapps/workshop/content/322330/%d", constant.DmpFiles, g.clusterName, id)) {
+			err = fmt.Errorf("steamcmd 没有下载到模组 %d 的文件", id)
+			logger.Logger.Errorf("%v", err)
+			return err, modSize
+		}
 
 		// 2
 		logger.Logger.Debugf("正在移动模组：%d", id)
@@ -122,7 +192,7 @@ func (g *Game) downloadMod(id int, fileURL string) (error, int64) {
 		}
 		copyCmd := g.generateModCopyCmd(id)
 		logger.Logger.Debug(copyCmd)
-		err = utils.BashCMD(copyCmd)
+		err = utils.BashCMDTimeout(constant.ModCopyTimeout, copyCmd)
 		if err != nil {
 			logger.Logger.Errorf("移动模组失败, err: %v", err)
 			return err, modSize
@@ -175,7 +245,67 @@ func (g *Game) downloadMod(id int, fileURL string) (error, int64) {
 }
 
 func (g *Game) generateModDownloadCmd(id int) string {
-	return fmt.Sprintf("steamcmd/steamcmd.sh +force_install_dir %s/%s/mods/ugc/%s +login anonymous +workshop_download_item 322330 %d +quit", cache.CurrentDir, constant.DmpFiles, g.clusterName, id)
+	// @ShutdownOnFailedCommand / @NoPromptForPassword 必须写在 +login 前面，
+	// 否则工坊接口报错或要密码时 steamcmd 会停在交互提示上，等到天荒地老
+	return fmt.Sprintf("steamcmd/steamcmd.sh +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +force_install_dir %s/%s/mods/ugc/%s +login anonymous +workshop_download_item 322330 %d +quit", cache.CurrentDir, constant.DmpFiles, g.clusterName, id)
+}
+
+// runSteamcmdDownload 执行工坊模组下载，带总超时和「体积不增长」看门狗。
+//
+// 1% 进度是前端占位符，不能拿来判断下载是否在动；这里只用下载目录的真实体积。
+// 一旦体积长时间不变就判定 steamcmd 卡死，取消并杀掉整个进程组，
+// 保证房间下载锁能释放、下载状态能清掉，玩家点重试就能重新下。
+func (g *Game) runSteamcmdDownload(id int, cmd string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), constant.ModDownloadTimeout)
+	defer cancel()
+
+	var stalled atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		ticker := time.NewTicker(constant.ModDownloadCheckInterval)
+		defer ticker.Stop()
+
+		lastSize := int64(-1)
+		lastChange := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				size := g.ugcDownloadBytes(id)
+				if size != lastSize {
+					lastSize = size
+					lastChange = now
+					continue
+				}
+				if now.Sub(lastChange) < constant.ModDownloadStallTimeout {
+					continue
+				}
+				stalled.Store(true)
+				logger.Logger.Warnf("模组 %d 下载 %d 秒没有进度，判定 steamcmd 卡死，终止下载",
+					id, int(now.Sub(lastChange).Seconds()))
+				cancel()
+				return
+			}
+		}
+	}()
+
+	err := utils.BashCMDContext(ctx, cmd)
+	cancel()
+	<-done
+
+	if stalled.Load() {
+		return fmt.Errorf("steamcmd 下载模组 %d 卡死（%d 秒没有进度），已终止",
+			id, int(constant.ModDownloadStallTimeout.Seconds()))
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("steamcmd 下载模组 %d 超时（超过 %d 分钟），已终止",
+			id, int(constant.ModDownloadTimeout.Minutes()))
+	}
+
+	return err
 }
 
 // ugcDownloadBytes 返回 SteamCMD 下载目录中模组当前占用的字节数。

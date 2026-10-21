@@ -1,5 +1,7 @@
 package constant
 
+import "time"
+
 // Version 平台版本号
 const Version = "v3.2.2"
 
@@ -29,3 +31,33 @@ const InternetIPApi2 = "http://cip.cc"
 
 // Darwin 系统名
 const Darwin = "darwin"
+
+// ========== 模组下载 ==========
+
+// ModDownloadTimeout 单个模组下载的总时长上限。
+// steamcmd 遇到网络问题、自更新失败或者工坊接口异常时会一直挂着不退出，
+// 没有上限的话它会永久占住房间的下载锁，只有重启 DMP 才能恢复
+const ModDownloadTimeout = 30 * time.Minute
+
+// ModDownloadStallTimeout 下载目录体积持续不变多久就判定 steamcmd 卡死。
+// 比总时长更重要：卡死的典型表现是进程还在、体积一动不动，没必要等满 30 分钟
+const ModDownloadStallTimeout = 3 * time.Minute
+
+// ModDownloadCheckInterval 模组下载体积检查间隔
+const ModDownloadCheckInterval = 5 * time.Second
+
+// ModCopyTimeout 下载完成后把模组拷进各世界目录、处理 acf 的超时时间
+const ModCopyTimeout = 10 * time.Minute
+
+// GameUpdateTimeout 游戏本体更新（steamcmd +app_update）的超时时间。
+// steamcmd 卡住时 DstUpdating 会一直为 true，之后所有更新请求都被跳过
+const GameUpdateTimeout = 30 * time.Minute
+
+// ========== 容器端口 ==========
+
+// EnvSurfacePort 容器传入的地面（主世界）端口。RGS 的 NAT 是 PortIn=PortOut，
+// DST 只会把 server_port 原样告诉客户端，所以面板必须直接监听对外端口
+const EnvSurfacePort = "DMP_SURFACE_PORT"
+
+// EnvCavePort 容器传入的洞穴端口，不填时取地面端口 +1
+const EnvCavePort = "DMP_CAVE_PORT"

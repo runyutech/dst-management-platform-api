@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"dst-management-platform-api/cache"
+	"dst-management-platform-api/constant"
 	"dst-management-platform-api/database/dao"
 	"dst-management-platform-api/database/models"
 	"dst-management-platform-api/dst"
@@ -109,7 +110,9 @@ func (h *Handler) execGamePost(c *gin.Context) {
 		go func() {
 			cache.DstUpdating = true
 			updateCmd := fmt.Sprintf("cd ~/steamcmd && ./steamcmd.sh +login anonymous +force_install_dir ~/dst +app_update 343050 validate +quit")
-			_ = utils.BashCMD(updateCmd)
+			if err := utils.BashCMDTimeout(constant.GameUpdateTimeout, updateCmd); err != nil {
+				logger.Logger.Errorf("游戏更新失败, err: %v", err)
+			}
 			cache.DstUpdating = false
 
 			// 如果需要重启，则重启激活的房间

@@ -141,6 +141,19 @@ func (h *Handler) downloadPost(c *gin.Context) {
 	}
 
 	if item, err := cache.ModDownloadStatus.Get(reqForm.RoomID, reqForm.ID); err == nil && item.CurrentSize < item.Size {
+		// 缓存里只是进度，不代表真的还有下载在跑。DMP 重启、看门狗终止、上次失败
+		// 都可能留下没清干净的记录，不区分的话这里会永远提示「下载中」，只能重启 DMP。
+		if dst.ModDownloadRunning(reqForm.RoomID, reqForm.ID) {
+			c.JSON(http.StatusOK, gin.H{"code": 200, "message": reqForm.Name + " " + message.Get(c, "downloading"), "data": nil})
+			return
+		}
+		logger.Logger.Warnf("模组 %d 有下载记录但没有下载在跑，清理残留状态后重新下载", reqForm.ID)
+		if deleteErr := cache.ModDownloadStatus.Delete(reqForm.RoomID, reqForm.ID); deleteErr != nil {
+			logger.Logger.Debugf("删除残留的模组下载状态失败, err: %v", deleteErr)
+		}
+	}
+
+	if !dst.TryStartModDownload(reqForm.RoomID, reqForm.ID) {
 		c.JSON(http.StatusOK, gin.H{"code": 200, "message": reqForm.Name + " " + message.Get(c, "downloading"), "data": nil})
 		return
 	}
@@ -150,12 +163,15 @@ func (h *Handler) downloadPost(c *gin.Context) {
 		Size:        reqSize,
 		CurrentSize: 0,
 	}); err != nil {
+		dst.FinishModDownload(reqForm.RoomID, reqForm.ID)
 		logger.Logger.Errorf("写入模组下载状态失败, err: %v", err)
 		c.JSON(http.StatusOK, gin.H{"code": 500, "message": message.Get(c, "server error"), "data": nil})
 		return
 	}
 
 	dl := func() {
+		defer dst.FinishModDownload(reqForm.RoomID, reqForm.ID)
+
 		err, modSize := game.DownloadMod(reqForm.ID, reqForm.FileURL)
 		if err != nil || modSize != reqSize64 {
 			logger.Logger.Debugf("模组大小与预期不符, %d, %d, err: %v", modSize, reqSize64, err)

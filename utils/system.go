@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -239,6 +240,43 @@ func BashCMD(cmd string) error {
 		return err
 	}
 	return nil
+}
+
+// BashCMDContext 执行Linux Bash 命令，ctx 结束（超时或取消）时杀掉整个进程组。
+// 用于 steamcmd 这类会派生多个子进程、卡住又不退出的命令。
+func BashCMDContext(ctx context.Context, cmd string) error {
+	cmdExec := exec.CommandContext(ctx, "/bin/bash", "-c", cmd)
+	setupProcessGroup(cmdExec)
+	cmdExec.Cancel = func() error {
+		return killProcessGroup(cmdExec)
+	}
+	// 进程组被杀后如果 Wait 还没返回，最多再等 5 秒，别把调用方永久挂住
+	cmdExec.WaitDelay = 5 * time.Second
+
+	var output bytes.Buffer
+	cmdExec.Stdout = &output
+	cmdExec.Stderr = &output
+
+	err := cmdExec.Run()
+	if err != nil {
+		// 只留最后一段输出，方便判断是网络、磁盘还是工坊接口的问题
+		tail := strings.TrimSpace(output.String())
+		if len(tail) > 2000 {
+			tail = tail[len(tail)-2000:]
+		}
+		if tail != "" {
+			return fmt.Errorf("%w, 输出: %s", err, tail)
+		}
+		return err
+	}
+	return nil
+}
+
+// BashCMDTimeout BashCMDContext 的定长超时封装
+func BashCMDTimeout(timeout time.Duration, cmd string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return BashCMDContext(ctx, cmd)
 }
 
 // BashCMDOutput 执行Linux Bash 命令，并返回结果

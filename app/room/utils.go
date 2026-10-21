@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"dst-management-platform-api/aichat"
 	"dst-management-platform-api/cache"
+	"dst-management-platform-api/constant"
 	"dst-management-platform-api/database/dao"
 	"dst-management-platform-api/database/models"
 	"dst-management-platform-api/dst"
@@ -776,4 +777,94 @@ func (h *Handler) checkGamePort(ports []int, excludeRoomID int) int {
 	}
 
 	return 0
+}
+
+// envGamePorts 读取容器传入的默认地面/洞穴端口。
+//
+// RGS 的 NAT 是 PortIn=PortOut，而 DST 只会把 server_port 原样告诉客户端（洞穴分片也一样），
+// 所以内网端口必须等于对外端口，不能再固定用 11001/11002。
+// 两个环境变量都没配时返回 false，普通部署行为不变。
+func envGamePorts() (surface, cave int, ok bool) {
+	surfaceStr := strings.TrimSpace(os.Getenv(constant.EnvSurfacePort))
+	if surfaceStr == "" {
+		return 0, 0, false
+	}
+	surface, err := strconv.Atoi(surfaceStr)
+	if err != nil || surface < 1 || surface > 65535 {
+		logger.Logger.Warnf("环境变量 %s 不是合法端口：%s，忽略", constant.EnvSurfacePort, surfaceStr)
+		return 0, 0, false
+	}
+
+	// 洞穴口没单独给就按 RGS 的连续口取 +1
+	cave, err = strconv.Atoi(strings.TrimSpace(os.Getenv(constant.EnvCavePort)))
+	if err != nil || cave < 1 || cave > 65535 || cave == surface {
+		cave = 0
+		if surface < 65535 {
+			cave = surface + 1
+		}
+	}
+
+	return surface, cave, true
+}
+
+// portUsedByOtherRoom 这些端口是否已被别的房间占着。查询失败时按「已占用」处理，宁可不改
+func (h *Handler) portUsedByOtherRoom(ports []int, roomID int) bool {
+	worlds, err := h.worldDao.Query(1, 10000, nil)
+	if err != nil {
+		logger.Logger.Errorf("checkGamePort 查询世界失败, err: %v", err)
+		return true
+	}
+	for _, world := range worlds.Data {
+		if world.RoomID == roomID {
+			continue
+		}
+		for _, port := range ports {
+			if port == world.ServerPort || port == world.MasterServerPort || port == world.AuthenticationPort {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// applyEnvGamePorts 用容器传入的端口覆盖地面（主世界）和洞穴的 server_port。
+// 只在端口没被其它房间占用时覆盖，一个 DMP 里开多个房间时保持原来的自动分配。
+func (h *Handler) applyEnvGamePorts(worlds []models.World, roomID int) {
+	surface, cave, ok := envGamePorts()
+	if !ok || len(worlds) == 0 {
+		return
+	}
+
+	ports := []int{surface}
+	if cave > 0 {
+		ports = append(ports, cave)
+	}
+	if h.portUsedByOtherRoom(ports, roomID) {
+		logger.Logger.Warnf("环境变量指定的默认端口 %v 已被其它房间占用，本次不覆盖", ports)
+		return
+	}
+
+	master := -1
+	for i := range worlds {
+		if worlds[i].IsMaster {
+			master = i
+			break
+		}
+	}
+	if master < 0 {
+		master = 0
+	}
+	worlds[master].ServerPort = surface
+
+	if cave > 0 {
+		for i := range worlds {
+			if i == master {
+				continue
+			}
+			worlds[i].ServerPort = cave
+			break
+		}
+	}
+
+	logger.Logger.Infof("使用环境变量端口：地面 %d，洞穴 %d", surface, cave)
 }

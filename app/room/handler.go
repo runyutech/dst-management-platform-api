@@ -67,6 +67,8 @@ func (h *Handler) roomPost(c *gin.Context) {
 
 		// 端口冲突检测
 		// MasterPort（[SHARD] master_port）不参与检测，允许重复
+		// RGS 传了默认地面/洞穴端口时先用它覆盖，再做冲突检测
+		h.applyEnvGamePorts(reqForm.WorldData, 0)
 		var ports []int
 		for _, world := range reqForm.WorldData {
 			ports = append(ports, world.ServerPort, world.MasterServerPort, world.AuthenticationPort)
@@ -235,6 +237,8 @@ func (h *Handler) roomPut(c *gin.Context) {
 
 	// 端口冲突检测
 	// 修改房间时 MasterPort 允许重复（[SHARD] master_port 在部分部署方式下可以与其它房间相同），因此不参与检测
+	// RGS 传了默认地面/洞穴端口时先用它覆盖，再做冲突检测
+	h.applyEnvGamePorts(reqForm.WorldData, reqForm.RoomData.ID)
 	var ports []int
 	for _, world := range reqForm.WorldData {
 		ports = append(ports, world.ServerPort, world.MasterServerPort, world.AuthenticationPort)
@@ -823,6 +827,8 @@ func (h *Handler) uploadPost(c *gin.Context) {
 			worlds[index].RoomID = roomID
 		}
 	}
+	// 容器里内外端口必须一致：已有房间也按环境变量纠一次，旧库里留着的 11001/11002 保存后就会改成实际端口
+	h.applyEnvGamePorts(worlds, roomID)
 
 	// 判断是否为统一模组
 	if len(worlds) >= 2 {

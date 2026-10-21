@@ -40,6 +40,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DMP_IN_CONTAINER=1
 
 # screen: DMP 用 screen 起每个世界
+# socat: 控制端给 steam 模板装 DST 时会把 127.0.0.1:80 转到区域 lancache，
+#   镜像里预装好，安装脚本里的 apt-get install 就是空操作（镜像已清掉 apt lists，现场装会失败）
 # lib32gcc-s1 / lib32stdc++6: DST 主体是 32 位程序，缺了起不来
 # libcurl3t64-gnutls 两个架构：DST 的 bin/lib32、bin64/lib64 都要 libcurl-gnutls.so.4 做软链，
 #   这个 .so.4 是 SONAME 链接，属于运行时包；装 -dev 包会多给 /usr/bin/curl-config，
@@ -48,7 +50,7 @@ RUN dpkg --add-architecture i386 \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl wget tar unzip jq tzdata rsync \
-      libarchive-tools \
+      libarchive-tools socat \
       screen \
       lib32gcc-s1 lib32stdc++6 \
       libcurl3t64-gnutls libcurl3t64-gnutls:i386 \

@@ -1,4 +1,5 @@
 .idea
+.gocache/
 .claude/*
 !.claude/skills/
 deliverables

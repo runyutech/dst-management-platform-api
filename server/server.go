@@ -19,8 +19,13 @@ import (
 	"dst-management-platform-api/middleware"
 	"dst-management-platform-api/scheduler"
 	"dst-management-platform-api/webhook"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/gin-contrib/gzip"
 	ginPprof "github.com/gin-contrib/pprof"
@@ -131,6 +136,14 @@ func Run() {
 	tools.NewHandler(userDao, roomDao, worldDao, roomSettingDao, dstImageDao, systemDao, roomAISettingDao, aiManager).RegisterRoutes(r)
 	player.NewHandler(userDao, roomDao, worldDao, roomSettingDao, uidMapDao, globalSettingDao).RegisterRoutes(r)
 
+	// 前端建房对话框的默认端口。上游 dist 里写死 11001/11002，
+	// 而 RGS 的 NAT 是 PortIn=PortOut，必须直接用分配到的对外端口，否则一进洞穴就掉线。
+	// 路由要放在静态资源中间件之前；dist 里没有这个文件，静态中间件会落到这里。
+	r.GET("/default-ports.js", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Data(http.StatusOK, "application/javascript; charset=utf-8", []byte(defaultPortsJS()))
+	})
+
 	r.Use(static.ServeEmbed("dist", embedFS.Dist))
 
 	// 启动服务器
@@ -145,4 +158,33 @@ func Run() {
 	if err != nil {
 		panic(fmt.Sprintf("启动服务器失败: %s", err.Error()))
 	}
+}
+
+// defaultPortsJS 把容器传入的地面/洞穴端口吐给前端。
+//
+// 返回 `window.__DMP_DEFAULT_PORTS__={"serverPort":33444,"cavePort":33445};`。
+// 两个变量都没配时给 0，前端会退回上游写死的 11000 系列，普通部署行为不变。
+func defaultPortsJS() string {
+	surface := envPort(constant.EnvSurfacePort)
+	cave := envPort(constant.EnvCavePort)
+	if cave == surface {
+		cave = 0
+	}
+	if surface > 0 && cave == 0 && surface < 65535 {
+		cave = surface + 1
+	}
+	b, err := json.Marshal(map[string]int{"serverPort": surface, "cavePort": cave})
+	if err != nil {
+		return "window.__DMP_DEFAULT_PORTS__={};"
+	}
+	return "window.__DMP_DEFAULT_PORTS__=" + string(b) + ";"
+}
+
+// envPort 读一个端口环境变量，非法或没配都返回 0
+func envPort(key string) int {
+	port, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || port < 1 || port > 65535 {
+		return 0
+	}
+	return port
 }

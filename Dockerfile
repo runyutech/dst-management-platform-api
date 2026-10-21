@@ -11,16 +11,25 @@
 FROM golang:1.25.4 AS build
 
 ENV CGO_ENABLED=0 \
-    GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct \
-    GOSUMDB=off
+    GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io \
+    GOSUMDB=off \
+    GOFLAGS=-mod=mod
 
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
+# 依赖目录挂 BuildKit 缓存，go.mod 变了也不用整份重下。
+# 不带 direct：所有依赖都能从国内代理拿到，走 direct 会去连 github，runner 上连不通就是长时间静默卡住。
+# timeout 兜底：go mod download 正常时一行都不打印，看着像卡住；真卡死在 7 分钟内失败并给出提示
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    echo "GOPROXY=$GOPROXY" \
+ && timeout 420 go mod download \
+ || (echo "go mod download 失败或超时（420s），先检查 runner 到 GOPROXY 的网络" >&2; exit 1)
 
 COPY . .
-RUN go build -ldflags '-s -w' -v -o /out/dmp main.go
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+    go build -ldflags '-s -w' -v -o /out/dmp main.go
 
 FROM ubuntu:24.04
 

@@ -797,7 +797,7 @@ func (h *Handler) uploadPost(c *gin.Context) {
 		roomSetting.ScheduledStartStopEnable = false
 		roomSetting.ScheduledStartStopSetting = "{\"start\":\"07:00:00\",\"stop\":\"01:00:00\"}"
 		roomSetting.AnnounceSetting = "[]"
-		roomSetting.StartType = "32-bit"
+		roomSetting.StartType = "64-bit"
 	} else {
 		dbRoom, err := h.roomDao.GetRoomByID(roomID)
 		if err != nil {

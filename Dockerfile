@@ -31,8 +31,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DMP_IN_CONTAINER=1
 
 # screen: DMP 用 screen 起每个世界
-# lib32gcc-s1 / lib32stdc++6 / libcurl4-gnutls-dev:i386: DST 是 32 位程序，缺了起不来
-# libcurl4-gnutls-dev: 给 64 位 bin64/lib64/libcurl-gnutls.so.4 做软链用
+# lib32gcc-s1 / lib32stdc++6: DST 主体是 32 位程序，缺了起不来
+# libcurl3t64-gnutls 两个架构：DST 的 bin/lib32、bin64/lib64 都要 libcurl-gnutls.so.4 做软链，
+#   这个 .so.4 是 SONAME 链接，属于运行时包；装 -dev 包会多给 /usr/bin/curl-config，
+#   两个架构的 -dev 会抢同一个文件，dpkg 直接报 "trying to overwrite shared /usr/bin/curl-config"
 RUN dpkg --add-architecture i386 \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -40,9 +42,11 @@ RUN dpkg --add-architecture i386 \
       libarchive-tools \
       screen \
       lib32gcc-s1 lib32stdc++6 \
-      libcurl4-gnutls-dev libcurl4-gnutls-dev:i386 \
+      libcurl3t64-gnutls libcurl3t64-gnutls:i386 \
  && ln -fs "/usr/share/zoneinfo/$TZ" /etc/localtime \
  && echo "$TZ" > /etc/timezone \
+ && test -e /usr/lib/x86_64-linux-gnu/libcurl-gnutls.so.4 \
+ && test -e /usr/lib/i386-linux-gnu/libcurl-gnutls.so.4 \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 

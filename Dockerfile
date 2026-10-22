@@ -11,25 +11,55 @@
 FROM golang:1.25.4 AS build
 
 ENV CGO_ENABLED=0 \
-    GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,https://goproxy.io \
-    GOSUMDB=off \
     GOFLAGS=-mod=mod
+
+# runner 解析国外域名经常超时，go mod download / go build 会卡在 TLS 握手等到超时。
+# 先固定国内 DNS。只影响这个 build 阶段，拉基础镜像由 docker daemon 自己做，不走这里。
+# /etc/resolv.conf 在 build 容器里可能是只读挂载，写不进去就沿用 runner 的 DNS，不要中断构建。
+RUN (echo "nameserver 223.5.5.5"; echo "nameserver 119.29.29.29") > /etc/resolv.conf 2>/dev/null \
+    || echo "resolv.conf 写不进去（只读挂载），沿用 runner 的 DNS"
+
+# 用 go env -w 写进 $GOENV，比 ENV 更贴近 go 实际读到的值（同一个键两处都设会出告警）。
+# GOPROXY 国内优先、proxy.golang.org 兜底、最后 direct；GOSUMDB 用 sum.golang.org 的国内镜像，
+# go.sum 完整时不会真的去查，缺条目时也不至于直接失败。
+RUN go env -w GO111MODULE=on \
+ && go env -w GOSUMDB=sum.golang.google.cn \
+ && go env -w GOPROXY=https://goproxy.cn,https://goproxy.io,https://proxy.golang.org,direct \
+ && go env GO111MODULE GOSUMDB GOPROXY
 
 WORKDIR /src
 
 COPY go.mod go.sum ./
 # 依赖目录挂 BuildKit 缓存，go.mod 变了也不用整份重下。
-# 不带 direct：所有依赖都能从国内代理拿到，走 direct 会去连 github，runner 上连不通就是长时间静默卡住。
-# timeout 兜底：go mod download 正常时一行都不打印，看着像卡住；真卡死在 7 分钟内失败并给出提示
+# go mod download 正常时一行都不打印，看着像卡住；每次限时 5 分钟，第三次还失败就带着提示退出。
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
-    echo "GOPROXY=$GOPROXY" \
- && timeout 420 go mod download \
- || (echo "go mod download 失败或超时（420s），先检查 runner 到 GOPROXY 的网络" >&2; exit 1)
+    for i in 1 2 3; do \
+      echo "go mod download（第 $i 次）"; \
+      if [ "$i" = "3" ]; then \
+        echo "最后一次改走 GOSUMDB=off + goproxy.cn"; \
+        GOSUMDB=off GOPROXY=https://goproxy.cn timeout 300 go mod download && break; \
+      else \
+        timeout 300 go mod download && break; \
+      fi; \
+      if [ "$i" = "3" ]; then \
+        echo "go mod download 三次都失败或超时（300s/次），检查 runner 到 GOPROXY 的网络和 DNS" >&2; \
+        exit 1; \
+      fi; \
+      sleep 5; \
+    done
 
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
-    go build -ldflags '-s -w' -v -o /out/dmp main.go
+    for i in 1 2 3; do \
+      echo "go build（第 $i 次）"; \
+      go build -ldflags '-s -w' -v -o /out/dmp main.go && break; \
+      if [ "$i" = "3" ]; then \
+        echo "go build 三次都失败" >&2; \
+        exit 1; \
+      fi; \
+      sleep 5; \
+    done
 
 FROM ubuntu:24.04
 

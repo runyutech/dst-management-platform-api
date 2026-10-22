@@ -10,47 +10,53 @@
 
 FROM golang:1.25.4 AS build
 
+# 构建机（sz-debian）在海外，直接用官方代理 + 官方 sumdb。
+# 不要再指 goproxy.cn / 阿里云 / 腾讯云这些国内镜像：从海外访问会被限速，
+# go 既不报错也不打印进度，就是静默卡到 timeout——之前几次卡在 go mod download 就是这个原因。
+# 也不要改 /etc/resolv.conf：runner 的 DNS 本来是好用的，换成 223.5.5.5 只会更慢。
 ENV CGO_ENABLED=0 \
+    GO111MODULE=on \
+    GOPROXY=https://proxy.golang.org,direct \
+    GOSUMDB=sum.golang.org \
     GOFLAGS=-mod=mod
-
-# runner 解析国外域名经常超时，go mod download / go build 会卡在 TLS 握手等到超时。
-# 先固定国内 DNS。只影响这个 build 阶段，拉基础镜像由 docker daemon 自己做，不走这里。
-# /etc/resolv.conf 在 build 容器里可能是只读挂载，写不进去就沿用 runner 的 DNS，不要中断构建。
-RUN (echo "nameserver 223.5.5.5"; echo "nameserver 119.29.29.29") > /etc/resolv.conf 2>/dev/null \
-    || echo "resolv.conf 写不进去（只读挂载），沿用 runner 的 DNS"
-
-# 用 go env -w 写进 $GOENV，比 ENV 更贴近 go 实际读到的值（同一个键两处都设会出告警）。
-# GOPROXY 国内优先、proxy.golang.org 兜底、最后 direct；GOSUMDB 用 sum.golang.org 的国内镜像，
-# go.sum 完整时不会真的去查，缺条目时也不至于直接失败。
-RUN go env -w GO111MODULE=on \
- && go env -w GOSUMDB=sum.golang.google.cn \
- && go env -w GOPROXY=https://goproxy.cn,https://goproxy.io,https://proxy.golang.org,direct \
- && go env GO111MODULE GOSUMDB GOPROXY
 
 WORKDIR /src
 
+# 容器里的出口可能和宿主机不一样（runner 是 docker-in-docker 时尤其如此），
+# 先花最多 24 秒探一下 443。全都不通就直接退出，别在这儿静默等 5 分钟。
+# 用 bash 的 /dev/tcp，不依赖 curl/wget 是否装过。
+RUN ok=0; \
+    for h in proxy.golang.org goproxy.cn github.com; do \
+      printf '探测 %s:443 ... ' "$h"; \
+      if timeout 8 bash -c "exec 3<>/dev/tcp/$h/443" 2>/dev/null; then echo 通; ok=1; else echo 不通; fi; \
+    done; \
+    [ "$ok" = "1" ] || { \
+      echo "镜像里连不上任何外网 443：检查 docker daemon 的 DNS/出口，或在 workflow 里用 --build-arg 传 HTTP_PROXY/HTTPS_PROXY" >&2; \
+      exit 1; }
+
 COPY go.mod go.sum ./
-# 依赖目录挂 BuildKit 缓存，go.mod 变了也不用整份重下。
-# go mod download 正常时一行都不打印，看着像卡住；每次限时 5 分钟，第三次还失败就带着提示退出。
-RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+# 依赖目录挂 BuildKit 缓存，go.mod 变了也不用整份重下。用 shared 不用 locked：
+# locked 是独占锁，runner 上另一个构建卡住时会静默排队，表现和网络卡住分不清。
+# -x 会把每个模块的下载命令打出来，卡在哪一条一眼就能看到（默认一行都不打印）。
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=shared \
     for i in 1 2 3; do \
-      echo "go mod download（第 $i 次）"; \
+      echo "go mod download（第 $i 次，GOPROXY=$GOPROXY）"; \
       if [ "$i" = "3" ]; then \
-        echo "最后一次改走 GOSUMDB=off + goproxy.cn"; \
-        GOSUMDB=off GOPROXY=https://goproxy.cn timeout 300 go mod download && break; \
+        echo "最后一次改走 GOPROXY=direct + GOSUMDB=off"; \
+        GOSUMDB=off GOPROXY=direct timeout 180 go mod download -x && break; \
       else \
-        timeout 300 go mod download && break; \
+        timeout 180 go mod download -x && break; \
       fi; \
       if [ "$i" = "3" ]; then \
-        echo "go mod download 三次都失败或超时（300s/次），检查 runner 到 GOPROXY 的网络和 DNS" >&2; \
+        echo "go mod download 三次都失败或超时（180s/次）" >&2; \
         exit 1; \
       fi; \
       sleep 5; \
     done
 
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
-    --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=shared \
+    --mount=type=cache,target=/root/.cache/go-build,sharing=shared \
     for i in 1 2 3; do \
       echo "go build（第 $i 次）"; \
       go build -ldflags '-s -w' -v -o /out/dmp main.go && break; \

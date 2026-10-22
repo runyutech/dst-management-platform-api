@@ -28,12 +28,38 @@ jobs:
           username: gitea
           password: ${{ secrets.PUBLIC_HARBOR_PASSWORD }}
 
+      # 构建卡在 go mod download 时，光看 go 的日志分不清是「宿主机能上网、容器不能」
+      # 还是「代理太慢」。这一步几秒跑完，把宿主机的 proxy 变量和直连结果打出来
+      - name: Check build egress
+        run: |
+          echo "== 宿主机 proxy 环境 =="
+          env | grep -iE '^(http|https|no|all)_proxy=' || echo "（没有 proxy 环境变量）"
+          echo "== 宿主机直连 =="
+          if command -v curl >/dev/null 2>&1; then
+            for u in https://proxy.golang.org/ https://goproxy.cn/ https://github.com/; do
+              curl -m 8 -sS -o /dev/null -w "  $u -> %{http_code} %{time_total}s\n" "$u" \
+                || echo "  $u 连不上"
+            done
+          else
+            echo "  宿主机没有 curl，跳过"
+          fi
+
       # 手动触发可以指定 tag，push 上来一律 latest。latest 每次都推，方便蛋直接引用
       - name: Build and push
         run: |
           TAG="${{ github.event.inputs.version }}"
           TAG="${TAG:-latest}"
-          echo "building $IMAGE:$TAG (and :latest)"
-          docker build --platform linux/amd64 -f ./Dockerfile -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          # runner 自己走代理才能上网时，docker build 里的容器默认拿不到这些变量，
+          # 结果就是 go mod download 静默卡到 timeout。把宿主机上有的 proxy 透传进去
+          ARGS=()
+          for k in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+            v="${!k}"
+            if [ -n "$v" ]; then
+              ARGS+=(--build-arg "$k=$v")
+            fi
+          done
+          echo "building $IMAGE:$TAG (and :latest)，透传的 build-arg：${ARGS[*]:-无}"
+          docker build --platform linux/amd64 -f ./Dockerfile "${ARGS[@]}" \
+            -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
           docker push "$IMAGE:$TAG"
           docker push "$IMAGE:latest"

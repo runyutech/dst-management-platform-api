@@ -194,6 +194,9 @@ func GameUpdate(enable bool, restart bool) {
 
 		cache.DstUpdating = true
 
+		// 钉住内容服务器区域，steamcmd 退出会重写 config.vdf，每次更新前都纠正一次
+		dst.EnsureSteamCellID()
+
 		updateCmd := fmt.Sprintf("cd ~/steamcmd && ./steamcmd.sh +login anonymous +force_install_dir ~/dst +app_update 343050 validate +quit")
 		if err := utils.BashCMDTimeout(constant.GameUpdateTimeout, updateCmd); err != nil {
 			logger.Logger.Errorf("[定时任务]：游戏更新失败, err: %v", err)

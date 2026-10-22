@@ -7,6 +7,7 @@ import (
 	"dst-management-platform-api/constant"
 	"dst-management-platform-api/database/dao"
 	"dst-management-platform-api/database/models"
+	"dst-management-platform-api/dst"
 	"dst-management-platform-api/logger"
 	"dst-management-platform-api/utils"
 	"fmt"
@@ -447,6 +448,8 @@ func installTMIR(string) ([]models.DstImage, error) {
 		"+quit",
 	}
 	cmd := exec.Command("steamcmd/steamcmd.sh", cmdArgs...)
+	// TMIR 也走 steamcmd，先钉住内容服务器区域
+	dst.EnsureSteamCellID()
 	if _, err := cmd.CombinedOutput(); err != nil {
 		_ = utils.RemoveDir(modDir)
 		logger.Logger.Errorf("下载TMIR模组失败: %v", err)

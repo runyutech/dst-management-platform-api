@@ -100,6 +100,12 @@ func AdminOnly() gin.HandlerFunc {
 func CacheControl() gin.HandlerFunc {
 	cacheDuration := constant.StaticCacheHours * time.Hour
 	return func(c *gin.Context) {
+		// /default-ports.js 是后端按环境变量现算的（而且带 .js 后缀会被下面命中），
+		// 不能按静态资源缓存，否则用户的建房对话框会一直用旧的默认端口
+		if c.Request.URL.Path == dynamicPortsPath {
+			c.Next()
+			return
+		}
 		// 只对静态资源文件设置缓存
 		if isStaticAsset(c.Request.URL.Path) {
 			// 设置缓存头
@@ -113,6 +119,9 @@ func CacheControl() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// dynamicPortsPath 当前运行环境注入给前端的默认端口脚本，每次都要现算
+const dynamicPortsPath = "/default-ports.js"
 
 // LoginRateLimit 登录接口限速，同一IP 1秒内只能请求一次
 func LoginRateLimit() gin.HandlerFunc {

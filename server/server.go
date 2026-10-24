@@ -136,13 +136,21 @@ func Run() {
 	tools.NewHandler(userDao, roomDao, worldDao, roomSettingDao, dstImageDao, systemDao, roomAISettingDao, aiManager).RegisterRoutes(r)
 	player.NewHandler(userDao, roomDao, worldDao, roomSettingDao, uidMapDao, globalSettingDao).RegisterRoutes(r)
 
-	// 前端建房对话框的默认端口。上游 dist 里写死 11001/11002，
+	// 前端建房对话框的默认端口。上游 dist 里写死 11000 系列（第一间房就是 11001/11002），
 	// 而 RGS 的 NAT 是 PortIn=PortOut，必须直接用分配到的对外端口，否则一进洞穴就掉线。
 	// 路由要放在静态资源中间件之前；dist 里没有这个文件，静态中间件会落到这里。
 	r.GET("/default-ports.js", func(c *gin.Context) {
-		c.Header("Cache-Control", "no-store")
+		// CacheControl 中间件按 .js 后缀给过 public/max-age/Expires，这里必须整段盖掉。
+		// 不然浏览器会一直用旧的默认端口去建房，和 NAT 分配的号对不上
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		c.Header("Pragma", "no-cache")
+		c.Header("Expires", "0")
 		c.Data(http.StatusOK, "application/javascript; charset=utf-8", []byte(defaultPortsJS()))
 	})
+
+	// 启动时把下发给前端的默认端口打出来。面板还是显示 11001/11002 时，
+	// 看这一行就能分清是「容器没拿到端口」还是「跑的还是旧镜像」
+	logDefaultPorts()
 
 	r.Use(static.ServeEmbed("dist", embedFS.Dist))
 
@@ -187,4 +195,23 @@ func envPort(key string) int {
 		return 0
 	}
 	return port
+}
+
+// logDefaultPorts 启动时打印生效的面板默认端口。
+//
+// RGS 的 NAT 是 PortIn=PortOut，建房对话框里显示的端口必须等于分配到的对外端口。
+// 这里没打出端口就说明启动命令里少了 export（老实例的 run.sh 还是旧的），
+// 或者跑的还是没有 /default-ports.js 的旧镜像，那时前端会退回 11001/11002。
+func logDefaultPorts() {
+	surface := envPort(constant.EnvSurfacePort)
+	cave := envPort(constant.EnvCavePort)
+	if surface == 0 {
+		logger.Logger.Warnf("未设置 %s，建房对话框会用上游默认端口 11001/11002，"+
+			"RGS 下会和 NAT 分配的端口对不上；检查启动命令里的 export 或重装实例", constant.EnvSurfacePort)
+		return
+	}
+	if cave == 0 {
+		cave = surface + 1
+	}
+	logger.Logger.Infof("面板默认端口：地面 %d，洞穴 %d（来自环境变量）", surface, cave)
 }

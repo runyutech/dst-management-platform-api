@@ -256,9 +256,6 @@ func (g *Game) generateModDownloadCmd(id int) string {
 // 一旦体积长时间不变就判定 steamcmd 卡死，取消并杀掉整个进程组，
 // 保证房间下载锁能释放、下载状态能清掉，玩家点重试就能重新下。
 func (g *Game) runSteamcmdDownload(id int, cmd string) error {
-	// 钉住内容服务器区域，避免被分到不稳定的 CDN 卡在 0%
-	EnsureSteamCellID()
-
 	ctx, cancel := context.WithTimeout(context.Background(), constant.ModDownloadTimeout)
 	defer cancel()
 

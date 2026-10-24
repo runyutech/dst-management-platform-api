@@ -21,7 +21,6 @@ import (
 	"dst-management-platform-api/webhook"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -70,6 +69,9 @@ func Run() {
 	// 初始化缓存
 	cache.InitCache()
 
+	// RGS 会把面板密码从启动命令导进来，有值就直接建/重置管理员，省掉注册那一步
+	user.EnsureEnvAdmin(userDao)
+
 	// 初始化文件
 	embedFS.GenerateDefaultFile()
 
@@ -88,11 +90,11 @@ func Run() {
 	// 请求日志格式
 	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
 		Formatter:       logger.AccessFormatter,
-		Output:          logger.AccessWriter,
+		Output:          logger.AccessLog,
 		SkipQueryString: true,
 	}))
 	// panic恢复，将panic日志写入runtime.log
-	r.Use(gin.CustomRecoveryWithWriter(logger.RuntimeWriter, func(c *gin.Context, recovered interface{}) {
+	r.Use(gin.CustomRecoveryWithWriter(logger.RuntimeLog, func(c *gin.Context, recovered interface{}) {
 		logger.Logger.Errorf("panic recovered: %v", recovered)
 		c.AbortWithStatus(500)
 	}))
@@ -136,17 +138,9 @@ func Run() {
 	tools.NewHandler(userDao, roomDao, worldDao, roomSettingDao, dstImageDao, systemDao, roomAISettingDao, aiManager).RegisterRoutes(r)
 	player.NewHandler(userDao, roomDao, worldDao, roomSettingDao, uidMapDao, globalSettingDao).RegisterRoutes(r)
 
-	// 前端建房对话框的默认端口。上游 dist 里写死 11000 系列（第一间房就是 11001/11002），
-	// 而 RGS 的 NAT 是 PortIn=PortOut，必须直接用分配到的对外端口，否则一进洞穴就掉线。
-	// 路由要放在静态资源中间件之前；dist 里没有这个文件，静态中间件会落到这里。
-	r.GET("/default-ports.js", func(c *gin.Context) {
-		// CacheControl 中间件按 .js 后缀给过 public/max-age/Expires，这里必须整段盖掉。
-		// 不然浏览器会一直用旧的默认端口去建房，和 NAT 分配的号对不上
-		c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-		c.Header("Pragma", "no-cache")
-		c.Header("Expires", "0")
-		c.Data(http.StatusOK, "application/javascript; charset=utf-8", []byte(defaultPortsJS()))
-	})
+	// 前端建房对话框的默认端口、一键登录脚本。
+	// 都要放在静态资源中间件之前，dist 里没有这两个文件
+	registerBootRoutes(r)
 
 	// 启动时把下发给前端的默认端口打出来。面板还是显示 11001/11002 时，
 	// 看这一行就能分清是「容器没拿到端口」还是「跑的还是旧镜像」
@@ -158,14 +152,22 @@ func Run() {
 	var err error
 	if cert != "" && key != "" {
 		// 证书文件和私钥文件都不为空，则启动https
+		logStartupMessage(fmt.Sprintf("https://0.0.0.0:%d", bindPort))
 		err = r.RunTLS(fmt.Sprintf(":%d", bindPort), cert, key)
 	} else {
 		// 否则启动http
+		logStartupMessage(fmt.Sprintf("http://0.0.0.0:%d", bindPort))
 		err = r.Run(fmt.Sprintf(":%d", bindPort))
 	}
 	if err != nil {
 		panic(fmt.Sprintf("启动服务器失败: %s", err.Error()))
 	}
+}
+
+// logStartupMessage 面板起来后打一行明确的成功提示。
+// 之前只有日志文件，容器里控制台一片空白，看不出到底起没起来
+func logStartupMessage(addr string) {
+	logger.Logger.Infof("DMP管理面板启动成功：%s（版本 %s）", addr, constant.Version)
 }
 
 // defaultPortsJS 把容器传入的地面/洞穴端口吐给前端。

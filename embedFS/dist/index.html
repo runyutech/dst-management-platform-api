@@ -11,6 +11,9 @@
   <!-- 雨云 RGS：默认地面/洞穴端口由后端按 DMP_SURFACE_PORT / DMP_CAVE_PORT 注入，
        必须在模块脚本之前加载，config 里的默认端口会读它 -->
   <script src="/default-ports.js"></script>
+  <!-- 雨云 RGS：地址里带 ?pwd= 时同步登录并写 localStorage，
+       必须在模块脚本之前（阻塞）执行，否则 Vue 会先按未登录启动再跳登录页 -->
+  <script src="/rgs-boot.js"></script>
   <script type="module" crossorigin src="/assets/index-Y5xDm4Nv.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/config-BU_Mcf42.js">
   <link rel="modulepreload" crossorigin href="/assets/tools-D2p9i6GY.js">

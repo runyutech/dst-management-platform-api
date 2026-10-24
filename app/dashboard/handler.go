@@ -356,7 +356,25 @@ func (h *Handler) connectionCodeGet(c *gin.Context) {
 
 	var connectionCode string
 
-	if roomSetting.CustomIP == "" {
+	// 直连代码的地址优先级：面板里设的自定义代码 > 启动命令传入的对外地址 > 机器自己探测的公网 IP。
+	//
+	// 中间那一档是给 RGS 准备的：NAT 之后玩家能连的地址是控制端分配的域名/端口
+	// （可能是域名，也可能不是本机出网 IP），机器自己 curl 出来的是出口 IP，
+	// 照抄到游戏里连不上。老部署没有这两个环境变量，行为不变
+	connectIP := roomSetting.CustomIP
+	connectPort := roomSetting.CustomPort
+	if connectIP == "" || connectPort <= 0 {
+		envIP := utils.ConnectHost()
+		envPort := utils.ConnectPort()
+		if connectIP == "" {
+			connectIP = envIP
+		}
+		if connectPort <= 0 {
+			connectPort = envPort
+		}
+	}
+
+	if connectIP == "" || connectPort <= 0 {
 		// 返回默认直连代码
 		var (
 			internetIp string
@@ -388,18 +406,18 @@ func (h *Handler) connectionCodeGet(c *gin.Context) {
 		if masterPort == 0 {
 			masterPort = (*worlds)[0].ServerPort
 		}
-		if room.Password == "" {
-			connectionCode = fmt.Sprintf("c_connect('%s', %d)", internetIp, masterPort)
-		} else {
-			connectionCode = fmt.Sprintf("c_connect('%s', %d, '%s')", internetIp, masterPort, room.Password)
+		if connectIP == "" {
+			connectIP = internetIp
 		}
+		if connectPort <= 0 {
+			connectPort = masterPort
+		}
+	}
+
+	if room.Password == "" {
+		connectionCode = fmt.Sprintf("c_connect('%s', %d)", connectIP, connectPort)
 	} else {
-		// 返回自定义直连代码
-		if room.Password == "" {
-			connectionCode = fmt.Sprintf("c_connect('%s', %d)", roomSetting.CustomIP, roomSetting.CustomPort)
-		} else {
-			connectionCode = fmt.Sprintf("c_connect('%s', %d, '%s')", roomSetting.CustomIP, roomSetting.CustomPort, room.Password)
-		}
+		connectionCode = fmt.Sprintf("c_connect('%s', %d, '%s')", connectIP, connectPort, room.Password)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "message": "success", "data": connectionCode})

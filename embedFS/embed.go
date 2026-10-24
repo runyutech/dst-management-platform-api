@@ -8,6 +8,7 @@ import (
 	"embed"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 )
 
@@ -23,9 +24,10 @@ var Shell embed.FS
 
 // CopyEmbeddedFiles err := CopyEmbeddedFiles(embedFS.Shell, "shell", "./output/shell", "", "start.sh", "stop.sh")
 func CopyEmbeddedFiles(sourceFS embed.FS, sourceRoot, targetDir, targetName string, includeFiles ...string) error {
-	// 直接构建完整的源文件路径
+	// 直接构建完整的源文件路径。embed.FS 里只有 / 分隔的路径，
+	// Windows 上 filepath.Join 会给出 luajit\liblua.so，读不到会直接 panic
 	for _, filename := range includeFiles {
-		sourcePath := filepath.Join(sourceRoot, filename)
+		sourcePath := path.Join(sourceRoot, filename)
 
 		// 读取嵌入文件
 		data, err := sourceFS.ReadFile(sourcePath)

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 
 	"dst-management-platform-api/constant"
@@ -59,5 +60,25 @@ func TestEnvPortInvalid(t *testing.T) {
 	t.Setenv("RGS_TEST_PORT", " 33444 ")
 	if got := envPort("RGS_TEST_PORT"); got != 33444 {
 		t.Fatalf("envPort() = %d, want 33444", got)
+	}
+}
+
+// 一键登录脚本要认 ?pwd=，登录后写进前端持久化的那个键，并且把密码从地址栏清掉
+func TestBootLoginJS(t *testing.T) {
+	js := bootLoginJS()
+
+	for _, want := range []string{
+		"p.get('" + bootPasswordParam + "')",
+		"/" + constant.ApiVersion + "/user/login",
+		"/" + constant.ApiVersion + "/user/base",
+		"/" + constant.ApiVersion + "/user/menu",
+		"localStorage.setItem('" + bootStorageKey + "'",
+		"history.replaceState",
+		// 同步请求：异步的话 App 会先按未登录启动
+		"x.open(method, path, false)",
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("bootLoginJS() 缺少 %q", want)
+		}
 	}
 }

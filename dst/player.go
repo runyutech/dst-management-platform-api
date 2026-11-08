@@ -5,6 +5,7 @@ import (
 	"dst-management-platform-api/utils"
 	"dst-management-platform-api/webhook"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -19,16 +20,23 @@ type playerSaveData struct {
 	adminlistPath string
 }
 
-func getPlayerList(filepath string) []string {
+func getPlayerList(fileName string) []string {
 	// 预留位 黑名单 管理员
-	err := utils.EnsureFileExists(filepath)
+	err := utils.EnsureFileExists(fileName)
 	if err != nil {
-		logger.Logger.Errorf("创建文件失败, err: %v, file: %v", err, filepath)
+		// 新建房间时控制器比 createRoom 先构造，cluster 目录还没建出来，三个名单都会报
+		// no such file or directory。这里补一次目录再重试，别让首次建房刷三条 ERROR
+		if dirErr := utils.EnsureDirExists(path.Dir(fileName)); dirErr == nil {
+			err = utils.EnsureFileExists(fileName)
+		}
+	}
+	if err != nil {
+		logger.Logger.Errorf("创建文件失败, err: %v, file: %v", err, fileName)
 		return []string{}
 	}
-	al, err := utils.ReadLinesToSlice(filepath)
+	al, err := utils.ReadLinesToSlice(fileName)
 	if err != nil {
-		logger.Logger.Errorf("读取文件失败, err: %v, file: %v", err, filepath)
+		logger.Logger.Errorf("读取文件失败, err: %v, file: %v", err, fileName)
 		return []string{}
 	}
 	var uidList []string

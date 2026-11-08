@@ -700,23 +700,52 @@ func uniqueSliceKeepOrderString(slice []string) []string {
 	return result
 }
 
+// replaceDSTSOFile 用 steamcmd 里较新的 steamclient.so 覆盖 DST 自带的旧版本。
+//
+// 注意：steamcmd 的 bootstrap 包（镜像里解压出来的那份）不一定带 steamclient.so，
+// 它是第一次运行 steamcmd 时才下载的，linux64/ 目录也可能不存在。
+// 原来无条件 mv 走游戏里的那份再 cp，源文件不存在时游戏就永久缺 steamclient.so，
+// 表现为 SteamGameServer_Init failed —— 洞穴分片拿不到大厅 IP，主世界永远认为洞穴
+// 世界断开（Skipping portal (different permanent world)），玩家点洞穴只会听到
+// 「大地本身在排斥我」。所以源文件不在时必须原样保留，缺文件时还要用 .bak 还原。
 func replaceDSTSOFile() {
-	var err error
-	err = utils.BashCMD("mv dst/bin/lib32/steamclient.so dst/bin/lib32/steamclient.so.bak")
-	if err != nil {
-		logger.Logger.Errorf("替换so文件失败, err: %v", err)
+	pairs := [][2]string{
+		{"steamcmd/linux32/steamclient.so", "dst/bin/lib32/steamclient.so"},
+		{"steamcmd/linux64/steamclient.so", "dst/bin64/lib64/steamclient.so"},
 	}
-	err = utils.BashCMD("cp steamcmd/linux32/steamclient.so dst/bin/lib32/steamclient.so")
-	if err != nil {
-		logger.Logger.Errorf("替换so文件失败, err: %v", err)
-	}
-	err = utils.BashCMD("mv dst/bin64/lib64/steamclient.so dst/bin64/lib64/steamclient.so.bak")
-	if err != nil {
-		logger.Logger.Errorf("替换so文件失败, err: %v", err)
-	}
-	err = utils.BashCMD("cp steamcmd/linux64/steamclient.so dst/bin64/lib64/steamclient.so")
-	if err != nil {
-		logger.Logger.Errorf("替换so文件失败, err: %v", err)
+
+	for _, pair := range pairs {
+		src, dst := pair[0], pair[1]
+		info, err := os.Stat(src)
+		if err != nil || info.Size() == 0 {
+			logger.Logger.Warnf("steamcmd 里没有 %s，保留游戏自带的 steamclient.so", src)
+			if _, err = os.Stat(dst); err != nil {
+				if _, bakErr := os.Stat(dst + ".bak"); bakErr == nil {
+					if err = utils.BashCMD(fmt.Sprintf("cp -f %s.bak %s", dst, dst)); err != nil {
+						logger.Logger.Errorf("还原so文件失败, file: %s, err: %v", dst, err)
+					} else {
+						logger.Logger.Infof("已还原so文件, file: %s", dst)
+					}
+				} else {
+					logger.Logger.Errorf("so文件缺失且没有备份, file: %s", dst)
+				}
+			}
+			continue
+		}
+
+		// 备份可能失败（文件本来就不在），不能因此跳过复制
+		if err = utils.BashCMD(fmt.Sprintf("mv -f %s %s.bak", dst, dst)); err != nil {
+			logger.Logger.Warnf("备份so文件失败, file: %s, err: %v", dst, err)
+		}
+		if err = utils.BashCMD(fmt.Sprintf("cp -f %s %s", src, dst)); err != nil {
+			logger.Logger.Errorf("替换so文件失败, file: %s, err: %v", dst, err)
+			// 拷不回去就把备份还原，不能把游戏留在缺文件的状态
+			if bakErr := utils.BashCMD(fmt.Sprintf("cp -f %s.bak %s", dst, dst)); bakErr != nil {
+				logger.Logger.Errorf("还原so文件失败, file: %s, err: %v", dst, bakErr)
+			}
+			continue
+		}
+		logger.Logger.Infof("已替换so文件, file: %s", dst)
 	}
 }
 

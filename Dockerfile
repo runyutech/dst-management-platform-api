@@ -69,11 +69,14 @@ RUN --mount=type=cache,target=/go/pkg/mod,sharing=shared \
 
 FROM ubuntu:24.04
 
+# DMP 的存档根目录是 $HOME/.klei/DoNotStarveTogether，只有 /workspace 是持久盘。
+# 镜像里钉一次，避免运行时按 /etc/passwd 把 HOME 改成 /home/container 之后存档写进容器层
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     LANG=C.UTF-8 \
     DMP_PORT=80 \
-    DMP_IN_CONTAINER=1
+    DMP_IN_CONTAINER=1 \
+    HOME=/workspace
 
 # screen: DMP 用 screen 起每个世界
 # socat: 控制端给 steam 模板装 DST 时会把 127.0.0.1:80 转到区域 lancache，
@@ -107,6 +110,15 @@ RUN mkdir -p /opt/dmp/steamcmd \
  && tar -zxf /tmp/steamcmd.tar.gz -C /opt/dmp/steamcmd \
  && rm -f /tmp/steamcmd.tar.gz \
  && ([ -x /opt/dmp/steamcmd/linux/steamcmd ] || ln -sfn linux32 /opt/dmp/steamcmd/linux)
+
+# bootstrap 包里没有 steamclient.so（第一次运行 steamcmd 才下载）。DMP 起世界前会拿它
+# 覆盖 dst/bin/lib32|lib64/steamclient.so，源文件缺了会把游戏自带的删掉，
+# SteamGameServer_Init 直接失败：洞穴分片拿不到大厅 IP，进洞穴只会提示「大地本身在排斥我」。
+# 构建期先跑一次把 steamclient.so 备齐，缺了就让构建失败，别把这个坑带到线上。
+RUN cd /opt/dmp/steamcmd \
+ && (HOME=/opt/dmp/steamcmd ./steamcmd.sh +login anonymous +quit >/dev/null 2>&1 || true) \
+ && test -s /opt/dmp/steamcmd/linux32/steamclient.so \
+ && ls -l /opt/dmp/steamcmd/linux32/steamclient.so
 
 COPY --from=build /out/dmp /opt/dmp/dmp
 COPY docker/entry-point-rgs.sh /opt/dmp/entry-point.sh

@@ -82,6 +82,10 @@ func Run() {
 	// 初始化 webhook sender
 	webhook.Snd = webhook.NewSender(globalSettingDao, roomSettingDao, roomDao)
 
+	// RGS 的房间名变量：实例启动时如果还没有房间，按默认参数建房并直接开服。
+	// 必须在 webhook 之后（启动世界会发事件）和 scheduler 之前（房间开启状态要参与定时任务注册）
+	room.EnsureQuickRoom(roomDao, worldDao, roomSettingDao)
+
 	// 开启定时任务
 	scheduler.Start(roomDao, worldDao, roomSettingDao, globalSettingDao, uidMapDao)
 

@@ -86,3 +86,20 @@ const (
 	EnvAdminPasswordMinLength = 6
 	EnvAdminPasswordMaxLength = 64
 )
+
+// EnvRoomName 容器传入的房间名。RGS 的饥荒蛋把它导成 DMP_ROOM_NAME：
+// 有值时实例启动如果还没有任何房间，就按默认参数直接建房并开服，玩家不用进面板点三步。
+// 留空时完全没有快捷开服行为，和普通 DMP 部署一致
+const EnvRoomName = "DMP_ROOM_NAME"
+
+// EnvRoomToken 快捷建房用的饥荒游戏令牌（科雷官网申请）。
+// 没配时用平台内置的默认令牌（utils.GetDstToken，和存档导入缺令牌时的兜底是同一个），
+// 所以自动建出来的房间默认就在线，能出现在游戏内的服务器列表里
+const EnvRoomToken = "DMP_ROOM_TOKEN"
+
+// QuickRoomGameMode 快捷建房的游戏模式。世界配置只能对应一种模式，
+// 所以这里固定成前端新建房间的默认值「无尽」，不做成变量
+const QuickRoomGameMode = "endless"
+
+// QuickRoomMaxNameLength 快捷建房房间名的最大长度（按字符算）
+const QuickRoomMaxNameLength = 32

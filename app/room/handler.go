@@ -161,7 +161,7 @@ func (h *Handler) roomPost(c *gin.Context) {
 
 		webhook.Snd.Send(webhook.EventRoomCreated, room.ID, reqForm)
 
-		c.JSON(http.StatusOK, gin.H{"code": 200, "message": message.Get(c, "create success"), "data": room})
+		c.JSON(http.StatusOK, gin.H{"code": 200, "message": message.Get(c, "room create success"), "data": room})
 		return
 	}
 
@@ -307,7 +307,12 @@ func (h *Handler) roomPut(c *gin.Context) {
 
 	webhook.Snd.Send(webhook.EventRoomSettingsUpdated, reqForm.RoomData.ID, reqForm)
 
-	c.JSON(http.StatusOK, gin.H{"code": 200, "message": message.Get(c, "update success"), "data": reqForm.RoomData})
+	// 保存设置后不会自动重启/启动世界，提示文案按房间激活状态给出下一步
+	savedMsgKey := "settings saved start"
+	if reqForm.RoomData.Status {
+		savedMsgKey = "settings saved restart"
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "message": message.Get(c, savedMsgKey), "data": reqForm.RoomData})
 }
 
 // listGet 按分页获取集群信息，并附带对应世界信息

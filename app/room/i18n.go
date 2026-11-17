@@ -31,5 +31,8 @@ var message = i18n.NewExtendedI18n(map[string]i18n.Text{
 	"activate success":                    {ZH: "激活成功", EN: "Activate Success"},
 	"port conflict":                       {ZH: "端口 [%d] 冲突", EN: "Port [%d] Conflict"},
 	"webhook test fail":                   {ZH: "Webhook 测试失败: %s", EN: "Webhook Test Failed: %s"},
+	"settings saved restart":              {ZH: "设置已保存，重启游戏后生效", EN: "Settings saved, restart the game to apply changes"},
+	"settings saved start":                {ZH: "设置已保存，启动游戏后生效", EN: "Settings saved, start the game to apply changes"},
+	"room create success":                 {ZH: "房间创建成功，请到控制面板启动游戏", EN: "Room created, start it from the dashboard"},
 	"webhook test success":                {ZH: "Webhook 测试成功", EN: "Webhook Test Success"},
 })
